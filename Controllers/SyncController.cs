@@ -45,7 +45,6 @@ public class SyncController : ControllerBase
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status413PayloadTooLarge)]
-    [RequestSizeLimit(52_428_800)] // 50 MB hard cap
     public async Task<IActionResult> Sync(
         [FromBody] SyncRequest request,
         CancellationToken ct)

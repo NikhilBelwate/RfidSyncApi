@@ -70,9 +70,6 @@ public class SyncRequestValidator : AbstractValidator<SyncRequest>
                       .NotEmpty()
                       .Must(et => ValidEventTypes.Contains(et))
                       .WithMessage($"event_type must be one of: {string.Join(", ", ValidEventTypes)}.");
-
-                change.RuleFor(c => c.Data!.Version)
-                      .GreaterThan(0).WithMessage("version must be > 0.");
             });
 
             // UPDATE and DELETE require a server_id
