@@ -55,17 +55,17 @@ public class SyncService : ISyncService
             "Sync started. DeviceId={DeviceId} BatchSize={BatchSize} LastSync={LastSync}",
             request.DeviceId, request.Changes.Count, request.LastSyncTime);
 
-        // ── 1. Partition changes by operation ─────────────────────────────────
+        // ── 1. Partition changes by effective operation (defaults to INSERT) ────
         var inserts = request.Changes
-            .Where(c => string.Equals(c.Operation, "INSERT", StringComparison.OrdinalIgnoreCase))
+            .Where(c => c.EffectiveOperation == "INSERT")
             .ToList();
 
         var updates = request.Changes
-            .Where(c => string.Equals(c.Operation, "UPDATE", StringComparison.OrdinalIgnoreCase))
+            .Where(c => c.EffectiveOperation == "UPDATE")
             .ToList();
 
         var deletes = request.Changes
-            .Where(c => string.Equals(c.Operation, "DELETE", StringComparison.OrdinalIgnoreCase))
+            .Where(c => c.EffectiveOperation == "DELETE")
             .ToList();
 
         // ── 2. Batch-load existing records (2 queries total) ──────────────────
@@ -97,10 +97,12 @@ public class SyncService : ISyncService
         response.Results = BuildOrderedResults(request.Changes, results);
 
         // ── 7. Fetch server_changes (delta since last_sync_time, page 0) ──────
-        if (request.LastSyncTime.HasValue)
+        //    last_sync_time == 0 means "first sync" — skip the delta pull
+        if (request.LastSyncTime > 0)
         {
+            var since = EpochMsToUtc(request.LastSyncTime);
             var (serverChanges, nextToken) = await GetServerChangesPageAsync(
-                request.DeviceId, request.LastSyncTime.Value, pageToken: null, ct);
+                request.DeviceId, since, pageToken: null, ct);
 
             response.ServerChanges = serverChanges;
             response.NextPageToken = nextToken;
@@ -202,33 +204,27 @@ public class SyncService : ISyncService
                     continue;
                 }
 
-                if (change.Data is null)
-                {
-                    results.Add(ErrorResult(change.LocalId, "INSERT requires non-null data."));
-                    continue;
-                }
-
                 var log = new RfidLog
                 {
-                    ServerId = Guid.NewGuid(),
-                    DeviceId = deviceId,
-                    LocalId = change.LocalId,
-                    TagId = change.Data.TagId,
-                    UserId = change.Data.UserId,
-                    SiteId = change.Data.SiteId,
-                    EventType = change.Data.EventType,
-                    CreatedAt = change.Data.CreatedAt,
-                    UpdatedAt = change.Data.UpdatedAt,
-                    Version = change.Data.Version,
+                    ServerId  = Guid.NewGuid(),
+                    DeviceId  = deviceId,
+                    LocalId   = change.LocalId,
+                    TagId     = change.TagId,
+                    UserId    = change.UserId ?? string.Empty,
+                    SiteId    = change.SiteId ?? string.Empty,
+                    EventType = change.EventType,
+                    CreatedAt = EpochMsToUtc(change.CreatedAt),
+                    UpdatedAt = EpochMsToUtc(change.UpdatedAt),
+                    Version   = change.Version,
                     IsDeleted = false
                 };
 
                 newLogs.Add(log);
                 results.Add(new ChangeResult
                 {
-                    LocalId = change.LocalId,
+                    LocalId  = change.LocalId,
                     ServerId = log.ServerId,
-                    Status = Success
+                    Status   = Success
                 });
             }
             catch (Exception ex)
@@ -250,9 +246,9 @@ public class SyncService : ISyncService
         {
             try
             {
-                if (change.ServerId is null || change.Data is null)
+                if (change.ServerId is null)
                 {
-                    results.Add(ErrorResult(change.LocalId, "UPDATE requires server_id and data."));
+                    results.Add(ErrorResult(change.LocalId, "UPDATE requires server_id."));
                     continue;
                 }
 
@@ -263,12 +259,12 @@ public class SyncService : ISyncService
                     continue;
                 }
 
-                var resolution = ResolveConflict(existing, change.Data);
+                var resolution = ResolveConflict(existing, change);
 
                 switch (resolution)
                 {
                     case ConflictResolution.Accept:
-                        ApplyUpdate(existing, change.Data);
+                        ApplyUpdate(existing, change);
                         results.Add(new ChangeResult
                         {
                             LocalId = change.LocalId,
@@ -278,7 +274,7 @@ public class SyncService : ISyncService
                         break;
 
                     case ConflictResolution.ClientWins:
-                        ApplyUpdate(existing, change.Data);
+                        ApplyUpdate(existing, change);
                         results.Add(new ChangeResult
                         {
                             LocalId = change.LocalId,
@@ -371,24 +367,24 @@ public class SyncService : ISyncService
     ///   incoming.version == server.version  → last-write-wins on updated_at
     ///                                          tie → ServerWins (conservative)
     /// </summary>
-    private static ConflictResolution ResolveConflict(RfidLog server, ChangeData incoming)
+    private static ConflictResolution ResolveConflict(RfidLog server, ChangeRecord incoming)
     {
         if (incoming.Version > server.Version) return ConflictResolution.Accept;
         if (incoming.Version < server.Version) return ConflictResolution.ServerWins;
 
-        // Equal versions — last-write-wins
-        if (incoming.UpdatedAt > server.UpdatedAt) return ConflictResolution.ClientWins;
+        // Equal versions — last-write-wins on updated_at (epoch ms → DateTime for comparison)
+        if (EpochMsToUtc(incoming.UpdatedAt) > server.UpdatedAt) return ConflictResolution.ClientWins;
         return ConflictResolution.ServerWins; // tie-break: server wins
     }
 
-    private static void ApplyUpdate(RfidLog target, ChangeData source)
+    private static void ApplyUpdate(RfidLog target, ChangeRecord source)
     {
-        target.TagId = source.TagId;
-        target.UserId = source.UserId;
-        target.SiteId = source.SiteId;
+        target.TagId     = source.TagId;
+        target.UserId    = source.UserId    ?? target.UserId;
+        target.SiteId    = source.SiteId    ?? target.SiteId;
         target.EventType = source.EventType;
-        target.UpdatedAt = DateTime.UtcNow; // always use server time for UpdatedAt
-        target.Version = source.Version;
+        target.UpdatedAt = DateTime.UtcNow; // always stamp with server time
+        target.Version   = source.Version;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -466,4 +462,13 @@ public class SyncService : ISyncService
         }
         catch { return 0; }
     }
+
+    // ── Timestamp helpers ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Converts a Unix epoch millisecond value (as sent by Android clients) to a
+    /// UTC <see cref="DateTime"/> suitable for EF Core / SQL Server storage.
+    /// </summary>
+    private static DateTime EpochMsToUtc(long epochMs)
+        => DateTimeOffset.FromUnixTimeMilliseconds(epochMs).UtcDateTime;
 }

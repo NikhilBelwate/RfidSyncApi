@@ -112,4 +112,26 @@ public class RfidLogRepository : IRfidLogRepository
 
         return (items, total);
     }
+
+    // ── GET /api/sessions ─────────────────────────────────────────────────────
+
+    public async Task<List<RfidLog>> GetCheckInOutLogsAsync(
+        string? deviceId,
+        CancellationToken ct = default)
+    {
+        var query = _db.RfidLogs
+            .AsNoTracking()
+            .Where(l => !l.IsDeleted &&
+                        (l.EventType == "CHECK_IN" || l.EventType == "CHECK_OUT"));
+
+        if (!string.IsNullOrWhiteSpace(deviceId))
+            query = query.Where(l => l.DeviceId == deviceId);
+
+        // Order for deterministic pairing: device → tag → time ascending
+        return await query
+            .OrderBy(l => l.DeviceId)
+            .ThenBy(l => l.TagId)
+            .ThenBy(l => l.CreatedAt)
+            .ToListAsync(ct);
+    }
 }

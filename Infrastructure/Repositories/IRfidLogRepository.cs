@@ -60,4 +60,13 @@ public interface IRfidLogRepository
         int page,
         int pageSize,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns all non-deleted CHECK_IN and CHECK_OUT records, optionally
+    /// filtered to a single device.  Used by the sessions computation service.
+    /// Ordered by device_id → tag_id → created_at ASC for deterministic pairing.
+    /// </summary>
+    Task<List<RfidLog>> GetCheckInOutLogsAsync(
+        string? deviceId,
+        CancellationToken ct = default);
 }

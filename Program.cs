@@ -72,6 +72,7 @@ try
     // ── Application Services (DI) ──────────────────────────────────────────
     builder.Services.AddScoped<IRfidLogRepository, RfidLogRepository>();
     builder.Services.AddScoped<ISyncService, SyncService>();
+    builder.Services.AddScoped<ISessionService, SessionService>();
 
     // ── FluentValidation ───────────────────────────────────────────────────
     builder.Services.AddScoped<IValidator<SyncRequest>, SyncRequestValidator>();
