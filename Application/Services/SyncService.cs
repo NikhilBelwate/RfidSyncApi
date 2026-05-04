@@ -27,7 +27,7 @@ public class SyncService : ISyncService
     private const string Success = "SUCCESS";
     private const string ConflictClientWins = "CONFLICT_CLIENT_WINS";
     private const string ConflictServerWins = "CONFLICT_SERVER_WINS";
-    private const string Skipped = "SKIPPED";
+    
     private const string Error = "ERROR";
 
     public SyncService(
@@ -211,7 +211,7 @@ public class SyncService : ISyncService
                         {
                             LocalId    = change.LocalId,
                             ServerId   = existing.ServerId,
-                            Status     = Skipped,
+                            Status     = "SYNCED",
                             SyncStatus = "SYNCED",
                             Message    = "Idempotent re-submit — record already accepted on server."
                         });
@@ -364,7 +364,7 @@ public class SyncService : ISyncService
                     {
                         LocalId = change.LocalId,
                         ServerId = change.ServerId,
-                        Status = Skipped,
+                        Status = "FAILED",
                         Message = "Record not found — possibly already deleted."
                     });
                     continue;
