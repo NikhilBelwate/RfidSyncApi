@@ -28,6 +28,15 @@ public class SyncRequestValidator : AbstractValidator<SyncRequest>
     private static readonly HashSet<string> ValidOperations =
         new(StringComparer.OrdinalIgnoreCase) { "INSERT", "UPDATE", "DELETE" };
 
+    /// <summary>
+    /// Values the mobile application uses to track local storage state.
+    /// PENDING  — scan queued, not yet sent to server.
+    /// SYNCED   — server confirmed receipt.
+    /// FAILED   — last sync attempt was rejected / errored.
+    /// </summary>
+    private static readonly HashSet<string> ValidSyncStatuses =
+        new(StringComparer.OrdinalIgnoreCase) { "PENDING", "SYNCED", "FAILED" };
+
     private static readonly HashSet<string> ValidEventTypes =
         new(StringComparer.OrdinalIgnoreCase)
         {
@@ -61,6 +70,14 @@ public class SyncRequestValidator : AbstractValidator<SyncRequest>
                 change.RuleFor(c => c.Operation)
                       .Must(op => ValidOperations.Contains(op!))
                       .WithMessage("operation must be INSERT, UPDATE, or DELETE.");
+            });
+
+            // sync_status is optional; when supplied it must be PENDING, SYNCED, or FAILED
+            change.When(c => !string.IsNullOrWhiteSpace(c.SyncStatus), () =>
+            {
+                change.RuleFor(c => c.SyncStatus)
+                      .Must(s => ValidSyncStatuses.Contains(s!))
+                      .WithMessage("sync_status must be PENDING, SYNCED, or FAILED.");
             });
 
             // ── INSERT / UPDATE: require scan payload fields ──────────────────

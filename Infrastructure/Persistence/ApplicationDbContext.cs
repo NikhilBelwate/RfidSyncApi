@@ -30,6 +30,13 @@ public class ApplicationDbContext : DbContext
                   .IsUnique()
                   .HasDatabaseName("UX_rfid_logs_device_local");
 
+            // ── Unique constraint: content-based idempotency key ─────────────
+            //    SHA-256(device_id|local_id|tag_id|event_type|user_id|created_at_ms)
+            //    Catches concurrent duplicate submissions that bypass the in-memory check.
+            entity.HasIndex(e => e.IdempotencyKey)
+                  .IsUnique()
+                  .HasDatabaseName("UX_rfid_logs_idempotency_key");
+
             // ── Query indexes ────────────────────────────────────────────────
             entity.HasIndex(e => e.DeviceId)
                   .HasDatabaseName("IX_rfid_logs_device_id");

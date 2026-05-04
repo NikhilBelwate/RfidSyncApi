@@ -191,32 +191,57 @@ public class SyncService : ISyncService
         {
             try
             {
+                var iKey = ComputeIdempotencyKey(
+                    deviceId, change.LocalId, change.TagId,
+                    change.EventType, change.UserId ?? string.Empty, change.CreatedAt);
+
                 if (existingByLocal.TryGetValue(change.LocalId, out var existing))
                 {
-                    // Idempotent re-sync: record already exists — return its server_id
-                    results.Add(new ChangeResult
+                    if (existing.IdempotencyKey == iKey)
                     {
-                        LocalId = change.LocalId,
-                        ServerId = existing.ServerId,
-                        Status = Skipped,
-                        Message = "Record already exists on server."
-                    });
+                        // ── True idempotent retry: identical payload resent ────────
+                        _logger.LogDebug(
+                            "Idempotent re-submit. DeviceId={DeviceId} LocalId={LocalId} ServerId={ServerId}",
+                            deviceId, change.LocalId, existing.ServerId);
+
+                        results.Add(new ChangeResult
+                        {
+                            LocalId  = change.LocalId,
+                            ServerId = existing.ServerId,
+                            Status   = Skipped,
+                            Message  = "Idempotent re-submit — record already accepted on server."
+                        });
+                    }
+                    else
+                    {
+                        // ── Same local_id but different content — data integrity issue ──
+                        _logger.LogWarning(
+                            "Idempotency conflict. DeviceId={DeviceId} LocalId={LocalId}: " +
+                            "existing key={ExistingKey} incoming key={IncomingKey}",
+                            deviceId, change.LocalId, existing.IdempotencyKey, iKey);
+
+                        results.Add(ErrorResult(change.LocalId,
+                            "Idempotency conflict: local_id already exists with different content. " +
+                            "Use operation=UPDATE with server_id to modify an existing record."));
+                    }
                     continue;
                 }
 
                 var log = new RfidLog
                 {
-                    ServerId  = Guid.NewGuid(),
-                    DeviceId  = deviceId,
-                    LocalId   = change.LocalId,
-                    TagId     = change.TagId,
-                    UserId    = change.UserId ?? string.Empty,
-                    SiteId    = change.SiteId ?? string.Empty,
-                    EventType = change.EventType,
-                    CreatedAt = EpochMsToUtc(change.CreatedAt),
-                    UpdatedAt = EpochMsToUtc(change.UpdatedAt),
-                    Version   = change.Version,
-                    IsDeleted = false
+                    ServerId        = Guid.NewGuid(),
+                    DeviceId        = deviceId,
+                    LocalId         = change.LocalId,
+                    TagId           = change.TagId,
+                    UserId          = change.UserId ?? string.Empty,
+                    SiteId          = change.SiteId ?? string.Empty,
+                    EventType       = change.EventType,
+                    CreatedAt       = EpochMsToUtc(change.CreatedAt),
+                    UpdatedAt       = EpochMsToUtc(change.UpdatedAt),
+                    Version         = change.Version,
+                    IsDeleted       = false,
+                    IdempotencyKey  = iKey,
+                    SyncStatus      = change.SyncStatus?.ToUpperInvariant()
                 };
 
                 newLogs.Add(log);
@@ -471,4 +496,27 @@ public class SyncService : ISyncService
     /// </summary>
     private static DateTime EpochMsToUtc(long epochMs)
         => DateTimeOffset.FromUnixTimeMilliseconds(epochMs).UtcDateTime;
+
+    // ── Idempotency key ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Computes a 64-char lowercase SHA-256 hex digest from the five business-key
+    /// fields that uniquely identify a physical scan event, plus the client timestamp.
+    ///
+    /// Key space: device_id | local_id | tag_id | event_type | user_id | created_at_ms
+    ///
+    /// Properties:
+    ///   • Deterministic — same inputs always produce the same key.
+    ///   • Collision-resistant — SHA-256 makes accidental or adversarial clashes negligible.
+    ///   • Compact — 64 hex chars fit in nvarchar(64) with no padding.
+    /// </summary>
+    private static string ComputeIdempotencyKey(
+        string deviceId, string localId, string tagId,
+        string eventType, string userId, long createdAtMs)
+    {
+        var raw = $"{deviceId}|{localId}|{tagId}|{eventType}|{userId}|{createdAtMs}";
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(raw));
+        return Convert.ToHexString(hash).ToLowerInvariant(); // 64-char hex
+    }
 }

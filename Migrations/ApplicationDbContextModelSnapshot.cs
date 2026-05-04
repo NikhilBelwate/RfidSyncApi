@@ -60,7 +60,18 @@ partial class ApplicationDbContextModelSnapshot : ModelSnapshot
             b.Property<int>("Version")
                 .HasDefaultValue(1).HasColumnType("int").HasColumnName("version");
 
+            b.Property<string>("IdempotencyKey")
+                .IsRequired().HasMaxLength(64).HasColumnType("nvarchar(64)").HasColumnName("idempotency_key");
+
+            b.Property<string>("SyncStatus")
+                .HasMaxLength(16).HasColumnType("nvarchar(16)").HasColumnName("sync_status");
+
             b.HasKey("ServerId");
+
+            b.HasIndex("IdempotencyKey")
+                .IsUnique()
+                .HasDatabaseName("UX_rfid_logs_idempotency_key");
+
             b.ToTable("rfid_logs");
         });
 #pragma warning restore 612, 618
