@@ -200,16 +200,20 @@ public class SyncService : ISyncService
                     if (existing.IdempotencyKey == iKey)
                     {
                         // ── True idempotent retry: identical payload resent ────────
+                        // Mark the existing record SYNCED (idempotent — no-op if already SYNCED)
+                        existing.SyncStatus = "SYNCED";
+
                         _logger.LogDebug(
                             "Idempotent re-submit. DeviceId={DeviceId} LocalId={LocalId} ServerId={ServerId}",
                             deviceId, change.LocalId, existing.ServerId);
 
                         results.Add(new ChangeResult
                         {
-                            LocalId  = change.LocalId,
-                            ServerId = existing.ServerId,
-                            Status   = Skipped,
-                            Message  = "Idempotent re-submit — record already accepted on server."
+                            LocalId    = change.LocalId,
+                            ServerId   = existing.ServerId,
+                            Status     = Skipped,
+                            SyncStatus = "SYNCED",
+                            Message    = "Idempotent re-submit — record already accepted on server."
                         });
                     }
                     else
@@ -227,6 +231,7 @@ public class SyncService : ISyncService
                     continue;
                 }
 
+                // ── New record: stamp SYNCED immediately — validation already passed ──
                 var log = new RfidLog
                 {
                     ServerId        = Guid.NewGuid(),
@@ -241,15 +246,16 @@ public class SyncService : ISyncService
                     Version         = change.Version,
                     IsDeleted       = false,
                     IdempotencyKey  = iKey,
-                    SyncStatus      = change.SyncStatus?.ToUpperInvariant()
+                    SyncStatus      = "SYNCED"   // server confirms acceptance
                 };
 
                 newLogs.Add(log);
                 results.Add(new ChangeResult
                 {
-                    LocalId  = change.LocalId,
-                    ServerId = log.ServerId,
-                    Status   = Success
+                    LocalId    = change.LocalId,
+                    ServerId   = log.ServerId,
+                    Status     = Success,
+                    SyncStatus = "SYNCED"
                 });
             }
             catch (Exception ex)
@@ -289,33 +295,38 @@ public class SyncService : ISyncService
                 switch (resolution)
                 {
                     case ConflictResolution.Accept:
-                        ApplyUpdate(existing, change);
+                        ApplyUpdate(existing, change);   // sets SyncStatus = "SYNCED" on entity
                         results.Add(new ChangeResult
                         {
-                            LocalId = change.LocalId,
-                            ServerId = existing.ServerId,
-                            Status = Success
+                            LocalId    = change.LocalId,
+                            ServerId   = existing.ServerId,
+                            Status     = Success,
+                            SyncStatus = "SYNCED"
                         });
                         break;
 
                     case ConflictResolution.ClientWins:
-                        ApplyUpdate(existing, change);
+                        ApplyUpdate(existing, change);   // sets SyncStatus = "SYNCED" on entity
                         results.Add(new ChangeResult
                         {
-                            LocalId = change.LocalId,
-                            ServerId = existing.ServerId,
-                            Status = ConflictClientWins,
-                            Message = "Versions equal; client's updated_at was newer — client wins."
+                            LocalId    = change.LocalId,
+                            ServerId   = existing.ServerId,
+                            Status     = ConflictClientWins,
+                            SyncStatus = "SYNCED",
+                            Message    = "Versions equal; client's updated_at was newer — client wins."
                         });
                         break;
 
                     case ConflictResolution.ServerWins:
+                        // Client record was NOT applied — do not mark SYNCED.
+                        // Device must fetch server_data and re-submit with updated version.
                         results.Add(new ChangeResult
                         {
-                            LocalId = change.LocalId,
-                            ServerId = existing.ServerId,
-                            Status = ConflictServerWins,
-                            Message = "Server version is newer — client must re-sync.",
+                            LocalId    = change.LocalId,
+                            ServerId   = existing.ServerId,
+                            Status     = ConflictServerWins,
+                            SyncStatus = null,   // explicitly null: client is out of date
+                            Message    = "Server version is newer — client must re-sync.",
                             ServerData = MapToServerChangeData(existing)
                         });
                         break;
@@ -359,16 +370,18 @@ public class SyncService : ISyncService
                     continue;
                 }
 
-                // Soft delete
-                existing.IsDeleted = true;
-                existing.UpdatedAt = DateTime.UtcNow;
+                // Soft delete — stamp SYNCED to confirm the delete was accepted
+                existing.IsDeleted  = true;
+                existing.UpdatedAt  = DateTime.UtcNow;
                 existing.Version++;
+                existing.SyncStatus = "SYNCED";
 
                 results.Add(new ChangeResult
                 {
-                    LocalId = change.LocalId,
-                    ServerId = existing.ServerId,
-                    Status = Success
+                    LocalId    = change.LocalId,
+                    ServerId   = existing.ServerId,
+                    Status     = Success,
+                    SyncStatus = "SYNCED"
                 });
             }
             catch (Exception ex)
@@ -404,12 +417,13 @@ public class SyncService : ISyncService
 
     private static void ApplyUpdate(RfidLog target, ChangeRecord source)
     {
-        target.TagId     = source.TagId;
-        target.UserId    = source.UserId    ?? target.UserId;
-        target.SiteId    = source.SiteId    ?? target.SiteId;
-        target.EventType = source.EventType;
-        target.UpdatedAt = DateTime.UtcNow; // always stamp with server time
-        target.Version   = source.Version;
+        target.TagId      = source.TagId;
+        target.UserId     = source.UserId    ?? target.UserId;
+        target.SiteId     = source.SiteId    ?? target.SiteId;
+        target.EventType  = source.EventType;
+        target.UpdatedAt  = DateTime.UtcNow; // always stamp with server time
+        target.Version    = source.Version;
+        target.SyncStatus = "SYNCED";        // server confirms this version is persisted
     }
 
     // ══════════════════════════════════════════════════════════════════════════

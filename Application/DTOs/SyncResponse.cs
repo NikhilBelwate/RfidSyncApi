@@ -51,6 +51,16 @@ public class ChangeResult
     /// <summary>Current server record when client is behind (CONFLICT_SERVER_WINS).</summary>
     [JsonPropertyName("server_data")]
     public ServerChangeData? ServerData { get; set; }
+
+    /// <summary>
+    /// Server-confirmed sync status for this record.
+    /// "SYNCED"  — record was accepted and persisted.
+    /// "SKIPPED" — idempotent re-submit; record already on server.
+    /// "ERROR"   — record was rejected; see <see cref="Message"/> for reason.
+    /// null      — not applicable (e.g. CONFLICT_SERVER_WINS: client must re-sync).
+    /// </summary>
+    [JsonPropertyName("sync_status")]
+    public string? SyncStatus { get; set; }
 }
 
 /// <summary>Server-initiated change pushed to the client during sync.</summary>
